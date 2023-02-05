@@ -1,7 +1,7 @@
 ## SXMO Bitwarden
 Userscript to enable browsing entries in bitwarden using dmenu
 
-Note: It is little slow due to bitwarden-cli, I will try to optimize
+Note: It is little slow due to `bitwarden-cli`, I will try to optimize
 but there is not much to do
 
 Features missing:
@@ -11,4 +11,6 @@ Features missing:
 - [ ] Better searching (little slow now)
 
 ## Installing:
+- install `bitwarden-cli`
+- - Archlinux `sudo pacman -S bitwarden-cli`
 - copy userscript to `~/.config/sxmo/userscripts/sxmo_bitwarden.sh`
