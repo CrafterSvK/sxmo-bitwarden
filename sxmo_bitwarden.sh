@@ -4,99 +4,221 @@
 # shellcheck source=scripts/core/sxmo_common.sh
 . sxmo_common.sh
 
+# config
+NOTIFICATION=1
+
 SESSION_TOKEN=""
 
 home() {
-  ENTRY="$(
-    printf %b "
-      Show All\n
-      Logout\n
-      Close Menu
-    " |
-      xargs -0 echo |
-      sed '/^[[:space:]]*$/d' |
-      awk '{$1=$1};1' |
-      sxmo_dmenu.sh -p "Search"
-  )" || exit 0
+    ENTRY="$(
+      grep . <<EOF | sxmo_dmenu_with_kb.sh -p "Home"
+Logins
+Cards
+Identities
+Secure notes
+Logout
+Close Menu
+EOF
+)"
 
-  if [ "Close Menu" = "$ENTRY" ]; then
-    exit 0
-  elif [ "Logout" = "$ENTRY" ]; then
-    bw logout
-  elif [ "Favorites" = "$ENTRY" ]; then
-    favorites
-  elif [ "Show All" = "$ENTRY" ]; then
-    all
-  else
-    search "$ENTRY"
-  fi
+  case "$ENTRY" in
+    "Close Menu")
+      exit 0
+    ;;
+    "Logout")
+      bw logout
+    ;;
+    "Logins")
+      all 1
+    ;;
+    "Cards")
+      all 3
+    ;;
+    "Identities")
+      all 4
+    ;;
+    "Secure notes")
+      all 2
+    ;;
+    "Sync")
+      [ $NOTIFICATION ] && notify-send "Bitwarden: synchronizing"
+      bw sync
+    ;;
+    *)
+      # search "$ENTRY" fixme: should search for everything? slow
+    ;;
+  esac
 }
 
 all() {
-  notify-send "Bitwarden: loading entries"
-  ITEMS="$(bw list items --session "$SESSION_TOKEN" | jq ".[].name" | sed -e 's/^"//' -e 's/"$//' | duplicates)"
+  case $1 in
+    "1")
+      TYPE_NAME="Logins"
+      entry="login_entry"
+    ;;
+    "2")
+      TYPE_NAME="Identities"
+      entry="identity_entry"
+    ;;
+    "3")
+      TYPE_NAME="Cards"
+      entry="card_entry"
+      ;;
+    "4")
+      TYPE_NAME="Notes"
+      entry="note_entry"
+      ;;
+    *)
+      home
+      ;;
+  esac
+
+  [ $NOTIFICATION ] && notify-send "Bitwarden: loading $TYPE_NAME"
+  ITEMS="$(bw list items --session "$SESSION_TOKEN" --nointeraction |
+          jq ".[] | select(.type == $1) | .name" |
+          sed -e 's/^"//' -e 's/"$//' |
+          duplicates)"
 
   if [ "$?" = 1 ]; then
+      [ $NOTIFICATION ] && notify-send "Bitwarden: password required"
       password_menu
   fi
 
   while true; do
     ENTRY="$(
-      printf %b "
-        Go Back\n
-        Close Menu\n
-        $ITEMS
-      " |
-        xargs -0 echo |
-        sed '/^[[:space:]]*$/d' |
-        awk '{$1=$1};1' |
-        sxmo_dmenu_with_kb.sh -p "Search"
-    )" || exit 0
-
-    if [ "Close Menu" = "$ENTRY" ]; then
-      exit 0
-    elif [ "Go Back" = "$ENTRY" ]; then
-      home
-    else
-      entry "$ENTRY"
-    fi
+      grep . <<EOF | sxmo_dmenu_with_kb.sh -p $TYPE_NAME
+Go Back
+Close Menu
+$ITEMS
+EOF
+)"
+    case "$ENTRY" in
+      "Close Menu")
+        exit 0
+      ;;
+      "Go Back")
+        home
+      ;;
+      *)
+        eval '"$entry" "$ENTRY"'
+      ;;
+    esac
   done
 }
 
-entry() {
-  IDX=$(echo "$1" | sed -e -n 's/.*\([0-9]\+\)$/\1/p')
+login_entry() {
+  IDX=$(echo "$1" | sed -n -e 's/.*\(\ \([0-9]\+\)\)$/\2/p')
   NAME=$(echo "$1" | sed -e 's/[0-9]\+$//')
-  INFO=$(bw list items --session "$SESSION_TOKEN" --search "$NAME")
-  USERNAME=$(echo "$INFO" | jq .["$IDX"].login.username | sed -e 's/^"//' -e 's/"$//')
-  PASSWORD=$(echo "$INFO" | jq .["$IDX"].login.password | sed -e 's/^"//' -e 's/"$//')
+  INFO=$(bw list items --session "$SESSION_TOKEN" --nointeraction  --search "$NAME" |
+        jq "[.[] | select(.type == 1)] | .[$IDX].login")
+  USERNAME=$(echo "$INFO" | jq .username | sed -e 's/^"//' -e 's/"$//')
+  PASSWORD=$(echo "$INFO" | jq .password | sed -e 's/^"//' -e 's/"$//')
 
   while true; do
     ENTRY="$(
-      printf %b "
-        Go Back\n
-        Close Menu\n
-        $USERNAME\n
-        Password
-      " |
-      xargs -0 echo |
-      sed '/^[[:space:]]*$/d' |
-      awk '{$1=$1};1' |
-      sxmo_dmenu_with_kb.sh -p "$NAME"
-    )" || exit 0
+      grep . <<EOF | sxmo_dmenu_with_kb.sh -p "$NAME"
+Go Back
+Close Menu
+"$USERNAME"
+Password
+EOF
+)"
 
-    if [ "Close Menu" = "$ENTRY" ]; then
-      exit 0
-    elif [ "Go Back" = "$ENTRY" ]; then
-      all
-    elif [ "Password" = "$ENTRY" ]; then
-      notify-send "Bitwarden: password copied"
+    case "$ENTRY" in
+      "Close Menu")
+        exit 0
+      ;;
+      "Go Back")
+        all_logins
+      ;;
+      "Password")
+        [ $NOTIFICATION ] && notify-send "Bitwarden: password copied"
+        copy_to_clipboard "$PASSWORD"
+      ;;
+      *)
+        [ $NOTIFICATION ] && notify-send "Bitwarden: value copied"
 
-      copy_to_clipboard "$PASSWORD"
-    else
-      notify-send "Bitwarden: value copied"
+        copy_to_clipboard "$ENTRY"
+      ;;
+    esac
+  done
+}
 
-      copy_to_clipboard "$ENTRY"
-    fi
+identity_entry() {
+  IDX=$(echo "$1" | sed -n -e 's/.*\(\ \([0-9]\+\)\)$/\2/p')
+  NAME=$(echo "$1" | sed -e 's/[0-9]\+$//')
+  INFO=$(bw list items --session "$SESSION_TOKEN" --nointeraction  --search "$NAME" |
+        jq "[.[] | select(.type == 4)] | .[$IDX]")
+
+  PHONE=$(echo "$INFO" | jq .phone | sed -e 's/^"//' -e 's/"$//')
+  PASSPORT=$(echo "$INFO" | jq .passportNumber | sed -e 's/^"//' -e 's/"$//')
+
+  while true; do
+  ENTRY="$(
+    grep . <<EOF | sxmo_dmenu_with_kb.sh -p "$NAME"
+Go Back
+Close Menu
+[ -z $PHONE] && $PHONE
+[ -z $PASSPORT] && $PASSPORT
+EOF
+)"
+    case "$ENTRY" in
+      "Close Menu")
+        exit 0
+      ;;
+      "Go Back")
+        all_logins
+      ;;
+      *)
+        [ $NOTIFICATION ] && notify-send "Bitwarden: value copied"
+
+        copy_to_clipboard "$ENTRY"
+      ;;
+    esac
+  done
+}
+
+card_entry() {
+  IDX=$(echo "$1" | sed -n -e 's/.*\(\ \([0-9]\+\)\)$/\2/p')
+  NAME=$(echo "$1" | sed -e 's/[0-9]\+$//')
+  INFO=$(bw list items --session "$SESSION_TOKEN" --nointeraction  --search "$NAME" |
+        jq "[.[] | select(.type == 3)] | .[$IDX].card")
+
+  CARDHOLDER=$(echo "$INFO" | jq .cardholderName | sed -e 's/^"//' -e 's/"$//' -e 's/^null$//')
+  NUMBER=$(echo "$INFO" | jq .number | sed -e 's/^"//' -e 's/"$//' -e 's/^null$//')
+  MONTH=$(echo "$INFO" | jq .expMonth | sed -e 's/^"//' -e 's/"$//' -e 's/^null$//')
+  YEAR=$(echo "$INFO" | jq .expYear | sed -e 's/^"//' -e 's/"$//' -e 's/^null$//')
+  CVC=$(echo "$INFO" | jq .code | sed -e 's/^"//' -e 's/"$//' -e 's/^null$//')
+
+  while true; do
+  ENTRY="$(
+    grep . <<EOF | sxmo_dmenu_with_kb.sh -p "$NAME"
+Go Back
+Close Menu
+$([ -n "$CARDHOLDER" ] && echo "$CARDHOLDER")
+$([ -n "$NUMBER" ] && echo "$NUMBER")
+$([ -n "$YEAR" ] && [ -n "$MONTH" ] && echo "$MONTH/$YEAR")
+$([ -n "$CVC" ] && echo "CVC")
+EOF
+)"
+    case "$ENTRY" in
+      "Close Menu")
+        exit 0
+      ;;
+      "Go Back")
+        all 3
+      ;;
+      "CVC")
+        [ $NOTIFICATION ] && notify-send "Bitwarden: CVC copied"
+
+        copy_to_clipboard "$CVC"
+      ;;
+      *)
+        [ $NOTIFICATION ] && notify-send "Bitwarden: value copied"
+
+        copy_to_clipboard "$ENTRY"
+      ;;
+    esac
   done
 }
 
@@ -106,31 +228,39 @@ password_menu() {
 
   while true; do
     ENTRY="$(
-      printf %b "
-        Close Menu
-      " |
-        xargs -0 echo |
-        sed '/^[[:space:]]*$/d' |
-        awk '{$1=$1};1' |
-        sxmo_dmenu_with_kb.sh -p "$PROMPT"
-    )" || exit 0
+      grep . <<EOF | sxmo_dmenu_with_kb.sh -p "$PROMPT"
+Close Menu
+$([ -z "$1" ] && echo "Logout")
+$([ -n "$1" ] && echo "Go Back")
+EOF
+)"
 
-    if [ "Close Menu" = "$ENTRY" ]; then
-      exit 0
-    else
-      notify-send "Bitwarden: Logging in"
-      if [ -z "$EMAIL" ]; then
-        SESSION_TOKEN=$(bw unlock "$ENTRY" --raw)
-      else
-        SESSION_TOKEN=$(bw login "$EMAIL" "$ENTRY" --raw)
-      fi
+    case "$ENTRY" in
+      "Close Menu")
+        exit 0
+      ;;
+      "Go Back")
+        login
+      ;;
+      "Logout")
+        bw logout
+        login
+      ;;
+      *)
+        [ $NOTIFICATION ] && notify-send "Bitwarden: Logging in"
+        if [ -z "$1" ]; then
+          SESSION_TOKEN=$(bw unlock "$ENTRY" --raw --nointeraction)
+        else
+          SESSION_TOKEN=$(bw login "$EMAIL" "$ENTRY" --raw --nointeraction)
+        fi
 
-      if [ "$?" = "0" ]; then
-        home
-      else
-        notify-send "Bitwarden: Wrong password"
-      fi
-    fi
+        if [ "$?" = "0" ]; then
+          home
+        else
+          [ $NOTIFICATION ] && notify-send "Bitwarden: Wrong password"
+        fi
+      ;;
+    esac
   done
 }
 
@@ -143,20 +273,19 @@ login() {
 
   while true; do
     ENTRY="$(
-      printf %b "
-        Close Menu
-      " |
-        xargs -0 echo |
-        sed '/^[[:space:]]*$/d' |
-        awk '{$1=$1};1' |
-        sxmo_dmenu_with_kb.sh -p "Email"
-    )" || exit 0
+      grep . <<EOF | sxmo_dmenu_with_kb.sh -p "Email"
+Close Menu
+EOF
+    )"
 
-    if [ "Close Menu" = "$ENTRY" ]; then
-      exit 0
-    else
-      password_menu "$ENTRY"
-    fi
+    case "$ENTRY" in
+      "Close Menu")
+        exit 0
+      ;;
+      *)
+        password_menu "$ENTRY"
+      ;;
+    esac
   done
 }
 
